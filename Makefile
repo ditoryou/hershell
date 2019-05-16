@@ -1,6 +1,6 @@
 BUILD=go build
-OUT_LINUX=hershell
-OUT_WINDOWS=hershell.exe
+OUT_LINUX=sysinelog
+OUT_WINDOWS=sysinelog.exe
 SRC=hershell.go
 SRV_KEY=server.key
 SRV_PEM=server.pem

